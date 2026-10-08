@@ -4,10 +4,26 @@ export class ValidationError extends Error {
   status = 400;
 }
 
+export class ConflictError extends Error {
+  status = 409;
+  constructor(message, conflict) {
+    super(message);
+    this.conflictStart = conflict.startTime;
+    this.conflictEnd = conflict.endTime;
+  }
+}
+
 function requireRoom(store, roomId) {
   if (!store.rooms.some((room) => room.id === roomId)) {
     throw new ValidationError('Choose an existing room.');
   }
+}
+
+// Half-open interval test: touching endpoints are not an overlap, so back-to-back bookings are allowed.
+function findOverlappingBooking(bookings, roomId, startTime, endTime) {
+  return bookings.find(
+    (existing) => existing.roomId === roomId && existing.startTime < endTime && existing.endTime > startTime
+  );
 }
 
 function parseTimestamp(value) {
@@ -48,6 +64,14 @@ export function createBooking(store, input) {
   const endTime = parseTimestamp(input.endTime);
   if (startTime >= endTime) {
     throw new ValidationError('End time must be after start time.');
+  }
+  const conflict = findOverlappingBooking(store.bookings, input.roomId, startTime, endTime);
+  if (conflict) {
+    const room = store.rooms.find((candidate) => candidate.id === input.roomId);
+    throw new ConflictError(
+      `${room.name} is already booked from ${conflict.startTime} to ${conflict.endTime}. Choose a different time or room.`,
+      conflict
+    );
   }
   const booking = {
     id: randomUUID(),
