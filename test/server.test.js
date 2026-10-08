@@ -36,6 +36,35 @@ test('API lists rooms, creates a booking, and retrieves it', async (t) => {
   assert.deepEqual(await listed.json(), [result]);
 });
 
+test('API rejects a conflicting booking with 409 and the conflicting interval', async (t) => {
+  const request = await setup(t);
+  const created = await request('/api/bookings', post(booking));
+  assert.equal(created.status, 201);
+  const response = await request(
+    '/api/bookings',
+    post({ ...booking, startTime: '2030-06-12T09:30:00Z', endTime: '2030-06-12T10:30:00Z' })
+  );
+  assert.equal(response.status, 409);
+  const body = await response.json();
+  assert.deepEqual(Object.keys(body), ['error']);
+  assert.match(body.error, /2030-06-12T09:00:00\.000Z/);
+  assert.match(body.error, /2030-06-12T10:00:00\.000Z/);
+  const listed = await request('/api/bookings?roomId=cedar&date=2030-06-12');
+  assert.equal((await listed.json()).length, 1);
+});
+
+test('API still returns 201 for a non-conflicting booking after a conflict was rejected', async (t) => {
+  const request = await setup(t);
+  await request('/api/bookings', post(booking));
+  const response = await request(
+    '/api/bookings',
+    post({ ...booking, startTime: '2030-06-12T11:00:00Z', endTime: '2030-06-12T12:00:00Z' })
+  );
+  assert.equal(response.status, 201);
+  const result = await response.json();
+  assert.equal(result.title, booking.title);
+});
+
 test('API returns useful validation errors and does not create invalid bookings', async (t) => {
   const request = await setup(t);
   const response = await request('/api/bookings', post({ ...booking, endTime: booking.startTime }));

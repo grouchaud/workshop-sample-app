@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createBooking, listBookings, ValidationError } from '../src/bookings.js';
+import { ConflictError, createBooking, listBookings, ValidationError } from '../src/bookings.js';
 import { createStore } from '../src/store.js';
 
 const validBooking = {
@@ -57,6 +57,102 @@ test('accepts a real leap day and millisecond timestamps', () => {
     ...validBooking, startTime: '2032-02-29T09:00:00.125Z', endTime: '2032-02-29T10:00:00.125Z',
   });
   assert.equal(booking.startTime, '2032-02-29T09:00:00.125Z');
+});
+
+test('rejects an overlapping booking in the same room with a 409 conflict', () => {
+  const store = createStore();
+  const existing = createBooking(store, { ...validBooking, startTime: '2030-06-12T10:00:00Z', endTime: '2030-06-12T11:00:00Z' });
+  assert.throws(
+    () => createBooking(store, { ...validBooking, startTime: '2030-06-12T10:30:00Z', endTime: '2030-06-12T11:30:00Z' }),
+    (error) => {
+      assert.ok(error instanceof ConflictError);
+      assert.equal(error.status, 409);
+      assert.equal(error.conflictStart, existing.startTime);
+      assert.equal(error.conflictEnd, existing.endTime);
+      assert.match(error.message, /Cedar is already booked from 2030-06-12T10:00:00\.000Z to 2030-06-12T11:00:00\.000Z/);
+      return true;
+    }
+  );
+  assert.equal(store.bookings.length, 1);
+});
+
+test('accepts a booking starting exactly when an existing booking in the same room ends', () => {
+  const store = createStore();
+  createBooking(store, { ...validBooking, startTime: '2030-06-12T10:00:00Z', endTime: '2030-06-12T11:00:00Z' });
+  const result = createBooking(store, { ...validBooking, startTime: '2030-06-12T11:00:00Z', endTime: '2030-06-12T12:00:00Z' });
+  assert.equal(store.bookings.length, 2);
+  assert.equal(result.startTime, '2030-06-12T11:00:00.000Z');
+});
+
+test('accepts a booking ending exactly when an existing booking in the same room starts', () => {
+  const store = createStore();
+  createBooking(store, { ...validBooking, startTime: '2030-06-12T10:00:00Z', endTime: '2030-06-12T11:00:00Z' });
+  const result = createBooking(store, { ...validBooking, startTime: '2030-06-12T09:00:00Z', endTime: '2030-06-12T10:00:00Z' });
+  assert.equal(store.bookings.length, 2);
+  assert.equal(result.startTime, '2030-06-12T09:00:00.000Z');
+});
+
+test('rejects an exact-duplicate time range in the same room', () => {
+  const store = createStore();
+  createBooking(store, { ...validBooking, startTime: '2030-06-12T10:00:00Z', endTime: '2030-06-12T11:00:00Z' });
+  assert.throws(
+    () => createBooking(store, { ...validBooking, startTime: '2030-06-12T10:00:00Z', endTime: '2030-06-12T11:00:00Z' }),
+    ConflictError
+  );
+  assert.equal(store.bookings.length, 1);
+});
+
+test('rejects a new booking that fully contains an existing booking in the same room', () => {
+  const store = createStore();
+  createBooking(store, { ...validBooking, startTime: '2030-06-12T10:00:00Z', endTime: '2030-06-12T11:00:00Z' });
+  assert.throws(
+    () => createBooking(store, { ...validBooking, startTime: '2030-06-12T09:00:00Z', endTime: '2030-06-12T12:00:00Z' }),
+    ConflictError
+  );
+  assert.equal(store.bookings.length, 1);
+});
+
+test('rejects a new booking fully contained within an existing booking in the same room', () => {
+  const store = createStore();
+  createBooking(store, { ...validBooking, startTime: '2030-06-12T10:00:00Z', endTime: '2030-06-12T11:00:00Z' });
+  assert.throws(
+    () => createBooking(store, { ...validBooking, startTime: '2030-06-12T10:15:00Z', endTime: '2030-06-12T10:45:00Z' }),
+    ConflictError
+  );
+  assert.equal(store.bookings.length, 1);
+});
+
+test('accepts an identical time range in a different room', () => {
+  const store = createStore();
+  createBooking(store, { ...validBooking, roomId: 'cedar', startTime: '2030-06-12T10:00:00Z', endTime: '2030-06-12T11:00:00Z' });
+  const result = createBooking(store, { ...validBooking, roomId: 'maple', startTime: '2030-06-12T10:00:00Z', endTime: '2030-06-12T11:00:00Z' });
+  assert.equal(store.bookings.length, 2);
+  assert.equal(result.roomId, 'maple');
+});
+
+test('reports the first conflict found when a new booking overlaps more than one existing booking', () => {
+  const store = createStore();
+  const first = createBooking(store, { ...validBooking, startTime: '2030-06-12T10:00:00Z', endTime: '2030-06-12T11:00:00Z' });
+  createBooking(store, { ...validBooking, startTime: '2030-06-12T11:30:00Z', endTime: '2030-06-12T12:30:00Z' });
+  assert.throws(
+    () => createBooking(store, { ...validBooking, startTime: '2030-06-12T10:30:00Z', endTime: '2030-06-12T12:00:00Z' }),
+    (error) => {
+      assert.ok(error instanceof ConflictError);
+      assert.equal(error.conflictStart, first.startTime);
+      assert.equal(error.conflictEnd, first.endTime);
+      return true;
+    }
+  );
+});
+
+test('catches a conflict against a booking spanning midnight regardless of calendar date', () => {
+  const store = createStore();
+  createBooking(store, { ...validBooking, startTime: '2030-06-12T23:00:00Z', endTime: '2030-06-14T00:00:00Z' });
+  assert.throws(
+    () => createBooking(store, { ...validBooking, startTime: '2030-06-13T12:00:00Z', endTime: '2030-06-13T13:00:00Z' }),
+    ConflictError
+  );
+  assert.equal(store.bookings.length, 1);
 });
 
 const invalidInputs = [
