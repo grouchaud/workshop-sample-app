@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { parseApiResponse, shouldResetFormOnOutcome } from './apiOutcome.js';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const timeLabel = (value) => value.slice(11, 16);
@@ -9,8 +10,7 @@ const dateLabel = (value) => new Date(`${value}T12:00:00Z`).toLocaleDateString('
 async function api(path, options) {
   const response = await fetch(`/api${path}`, options);
   const body = await response.json();
-  if (!response.ok) throw new Error(body.error ?? 'Unable to complete the request.');
-  return body;
+  return parseApiResponse(response.ok, body);
 }
 
 function RoomSketch({ capacity }) {
@@ -46,9 +46,10 @@ function BookingForm({ room, date, onBooked }) {
           endTime: `${date}T${fields.get('endTime')}:00Z`,
         }),
       });
-      form.reset();
+      if (shouldResetFormOnOutcome('success')) form.reset();
       onBooked(booking);
     } catch (error) {
+      if (shouldResetFormOnOutcome('error')) form.reset();
       setError(error.message);
     } finally {
       setSaving(false);
@@ -67,24 +68,27 @@ function BookingForm({ room, date, onBooked }) {
         <fieldset disabled={saving} className="space-y-5 disabled:opacity-60">
           <label className="field-label">
             Meeting title
-            <input name="title" placeholder="e.g. Product brainstorm" required maxLength={100} />
+            <input data-testid="booking-form-title-input" name="title" placeholder="e.g. Product brainstorm" required maxLength={100} />
           </label>
           <label className="field-label">
             Organizer
-            <input name="organizer" placeholder="e.g. Alex Morgan" required maxLength={100} autoComplete="off" />
+            <input data-testid="booking-form-organizer-input" name="organizer" placeholder="e.g. Alex Morgan" required maxLength={100} autoComplete="off" />
           </label>
           <div className="grid grid-cols-2 gap-3">
             <label className="field-label">
               Start time
-              <input name="startTime" type="time" defaultValue="09:00" step="60" required />
+              <input data-testid="booking-form-start-time-input" name="startTime" type="time" defaultValue="09:00" step="60" required />
             </label>
             <label className="field-label">
               End time
-              <input name="endTime" type="time" defaultValue="10:00" step="60" required />
+              <input data-testid="booking-form-end-time-input" name="endTime" type="time" defaultValue="10:00" step="60" required />
             </label>
           </div>
-          {error && <p role="alert" className="rounded-xl bg-white p-3 text-sm text-red-800">{error}</p>}
-          <button className="book-button" type="submit">
+          <p className="text-xs text-white/60">
+            Rooms can be booked back-to-back — a room free from 11:00 can be booked starting exactly at 11:00.
+          </p>
+          {error && <p data-testid="booking-form-error-alert" role="alert" className="rounded-xl bg-white p-3 text-sm text-red-800">{error}</p>}
+          <button data-testid="booking-form-submit-button" className="book-button" type="submit">
             {saving ? 'Booking…' : 'Confirm booking'} <span aria-hidden="true">↗</span>
           </button>
         </fieldset>
